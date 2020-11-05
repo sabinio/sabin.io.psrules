@@ -13,7 +13,7 @@ function PesterScriptBlocksForV5Compat {
     )
 
     Begin {
-        $PesterBlockCommands = "Describe", "Context"
+        $PesterBlockCommands = "Describe", "Context","InPesterModuleScope"
         $PesterRunCommands = "BeforeAll", "BeforeEach", "BeforeDiscovery", "AfterAll", "AfterEach", "InModuleScope", "It"
         
 
@@ -58,7 +58,7 @@ function PesterScriptBlocksForV5Compat {
                             }
                         } 
                         elseif ($PesterRunCommands -notContains $Command[0].Value ) {
-                            
+
                             $bad = "Code found outside of Pester Block $statement"
          
                         }

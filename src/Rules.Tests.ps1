@@ -93,3 +93,15 @@ Describe "Test script with Pester" {
         (PesterScriptBlocksForV5Compat $script.Ast).Count | Should -be 0
     }
 }
+Describe "Check Pester allowed" {
+    
+        It "Should produce ignore comments" {
+    
+            $script = [ScriptBlock]::Create("
+InPesterModuleScope {
+    Describe 'Find-File' {}
+        }
+            ")
+            (PesterScriptBlocksForV5Compat $script.Ast).Count | Should -be 0
+        }
+}
