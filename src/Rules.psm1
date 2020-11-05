@@ -26,36 +26,39 @@ function PesterScriptBlocksForV5Compat {
 
             $blocks = $script.FindAll( { param ($i) return ($i -is [NamedBlockAst]) }, $false)
             foreach ( $o in $blocks ) {
-                ##find all pipeline AST Each should be a command Ast with command of Describe, Context, Before
-                #$statements = $o.Findall( { param ($i) return ($i -is [PipelineBaseAST]) }, $false)
+                ##find all statements in a block, each should be a command Ast with command of a pester command
+
+                #We navigate the statements as using Find results in finding items within command calls
                 foreach ($statement in $o.statements) {
                     $bad = ""
                     if ($statement -isNot [PipelineAst] ) {
+                        #All Pester statements are Pipelines
                         $bad = "Code found outside of Pester Block $statement"   
                     }
-                    #         elseif ($statement.PipelineElements[0] -isnot [CommandAst]) {
-                    #              $bad = "Script found outside of AST found $statement"
-                    #           }
                     elseif ( $statement.PipelineElements[0] -isnot [CommandAst]) {
+                        #The item in the pipeline needs to be a Command, expressions and other things aren't valid pester
                         $bad = "Code found outside of Pester Block $statement"   
                     }
                     else {
-                        #                $command = $statement.CommandElements
+                        
                         $command = $statement.PipelineElements[0].CommandElements
                         if ($null -eq $Command) {
-                            Write-Verbose "Bugger"
+                            Write-Verbose "Should definitely not get here"
                         }
                         if ($PesterBlockCommands -contains $Command[0].Value ) {
                             Write-Verbose "Found Command $($Command[0])"
+                            #We are using this rather than find otherwise scripts for ForEach or other parameter values are incorrectly identified
                             $scripts = $command | Where-Object { $_ -is [ScriptBlockExpressionAst] }
                             if ($scripts.Length -gt 1 ) {
                                 Throw "should only have 1 script in a describe block"
                             }  
                             else {
+                                #Check child blocks
                                 Find-BadBlocks $scripts[0].ScriptBlock $File
                             }
                         } 
                         elseif ($PesterRunCommands -notContains $Command[0].Value ) {
+                            
                             $bad = "Code found outside of Pester Block $statement"
          
                         }
