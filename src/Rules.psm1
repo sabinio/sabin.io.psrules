@@ -1,8 +1,59 @@
 using namespace  System.Management.Automation.Language;
+Set-StrictMode -version 1.0
 <#
     .DESCRIPTION
         Custom rule text when you call Invoke-Something.
 #>  
+
+
+function Generate-BeforeAll {
+    param ($Statements, $Start, $End, $Message)
+    
+    Write-DebugDiag "Generate-BeforeAll -start" "$($Statements.Count) $Start $End $Message" $statement[0].Extent 0
+
+    try {
+
+        $StartingExtent =  $statements[$Start].Extent
+        $EndingExtent = $statements[$End].Extent
+        $extent =  [ScriptExtent]::new([ScriptPosition]::new("", $StartingExtent.StartScriptPosition.LineNumber, $StartingExtent.StartScriptPosition.ColumnNumber, "")
+        , [ScriptPosition]::new("", $EndingExtent.EndScriptPosition.LineNumber, $EndingExtent.EndScriptPosition.ColumnNumber, ""))
+
+        $Response = [Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord]@{
+            Message    = $Message
+            ; Extent   = $Extent
+            ;
+            ; RuleName = $PSCmdlet.MyInvocation.InvocationName
+            ; Severity = "Warning" 
+        }
+
+          $startLineNumber = $Response.Extent.StartLineNumber
+    [int]$endLineNumber = $Response.Extent.EndLineNumber
+    [int]$startColumnNumber = $Response.Extent.StartColumnNumber
+    [int]$endColumnNumber = $Response.Extent.EndColumnNumber
+    [string]$correction = "BeforeAll {`n    " + ($statements[$start..$end].extent.text -join "`n    ") + "`n}"
+    [string]$optionalDescription = 'Wrap statements in BeforeAll'
+                       
+    $correctionExtent = New-Object Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.CorrectionExtent $startLineNumber, $endLineNumber, $startColumnNumber, $endColumnNumber, $correction, "",$optionalDescription
+    $suggestedCorrections = New-Object System.Collections.ObjectModel.Collection['Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.CorrectionExtent']
+    $suggestedCorrections.add($correctionExtent) | out-null
+    $Response.SuggestedCorrections = $suggestedCorrections
+   
+        Write-Output $Response
+
+        Write-DebugDiag "Generate-BeforeAll -end" "Respone = $($Response.Message)" $statement[0].Extent 0
+    }
+    catch {
+        Write-DebugDiag "Generate-BeforeAll -error" $_ $statement[0].Extent 0
+
+    }
+} 
+function Write-DebugDiag {
+    param ($message1, $message2, $Extent, $level)
+    $indent = (" " * 2 * $level)
+    if ($null -ne $Env:DEBUGSCRIPTANAL) {
+        Write-output ([Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord]::new($indent + $message1, $Extent, $message2, "Information", $null, $null, $null))
+    }
+}
 function PesterScriptBlocksForV5Compat {
 
     [CmdletBinding()]
@@ -13,7 +64,7 @@ function PesterScriptBlocksForV5Compat {
     )
 
     Begin {
-        $PesterBlockCommands = "Describe", "Context","InPesterModuleScope"
+        $PesterBlockCommands = "Describe", "Context", "InPesterModuleScope"
         $PesterRunCommands = "BeforeAll", "BeforeEach", "BeforeDiscovery", "AfterAll", "AfterEach", "InModuleScope", "It"
         
 
@@ -22,14 +73,22 @@ function PesterScriptBlocksForV5Compat {
         }
 
         function Find-BadBlocks {
-            param($script, $file) 
+            param($script, $file, $level = 1) 
 
+            
             $blocks = $script.FindAll( { param ($i) return ($i -is [NamedBlockAst]) }, $false)
             foreach ( $o in $blocks ) {
                 ##find all statements in a block, each should be a command Ast with command of a pester command
 
                 #We navigate the statements as using Find results in finding items within command calls
+                [int]$FirstBadStatementInBlock = -2
+                [int]$lastBadStatementInBlock = -2
+                
+                $StatementIndex = 0
+                $badBlock = $false
                 foreach ($statement in $o.statements) {
+                    Write-DebugDiag "Processing " "$StatementIndex/$($o.Statements.Count) $FirstBadStatementInBlock $LastBadStatementInBlock "  $statement.Extent $level
+
                     $bad = ""
                     if ($statement -isNot [PipelineAst] ) {
                         #All Pester statements are Pipelines
@@ -54,7 +113,7 @@ function PesterScriptBlocksForV5Compat {
                             }  
                             else {
                                 #Check child blocks
-                                Find-BadBlocks $scripts[0].ScriptBlock $File
+                                Find-BadBlocks $scripts[0].ScriptBlock -file $File -level ($level + 1)
                             }
                         } 
                         elseif ($PesterRunCommands -notContains $Command[0].Value ) {
@@ -63,20 +122,34 @@ function PesterScriptBlocksForV5Compat {
          
                         }
                     }
+                    
+                    #Check if statement is continuous
                     if ($bad -ne "") {
-                        $message = [Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord]@{
-                            Message    = $bad
-                            ; Extent   = $statement.Extent
-                            ; RuleName = $PSCmdlet.MyInvocation.InvocationName
-                            ; Severity = "Warning" 
+                        Write-DebugDiag "Found bad block" ""  $statement.Extent $level
+                        if (-not $badBlock){
+                            $FirstBadStatementInBlock = $StatementIndex
+                            $badBlock = $true
                         }
-                        Write-Output $message
+                        $LastBadStatementInBlock = $StatementIndex
                     }
-                }
+                    else {
+                        if ($badBlock) {
+                            Write-DebugDiag "Save Bad Block on Good Statement" "$StatementIndex $FirstBadStatementInBlock $LastBadStatementInBlock"  $statement.Extent $level
 
+                            Generate-BeforeAll  -statements $o.statements -Start $FirstBadStatementInBlock -end $lastBadStatementInBlock -message "--"
+                            $badBlock = $false
+                        }
+                    }
+                    if ( $statementIndex -eq ($o.statements.Count - 1) -and $badBlock) {
+                        Generate-BeforeAll  -statements $o.statements -Start $FirstBadStatementInBlock -end $lastBadStatementInBlock -message $bad
+                    }
+                
+                    $StatementIndex ++
+                }
             }
         }
     }
+
 
     Process {
         Try {
@@ -87,9 +160,12 @@ function PesterScriptBlocksForV5Compat {
                 $Pester = $ScriptBlockAst.Find( { param ($command) $command -is [CommandAst] -and ([commandAst]$command).CommandElements[0].Value -eq "Describe" }, $true)
 
                 if ($null -ne $Pester) {
-                    Find-BadBlocks $ScriptBlockAst
+        
+                    Find-BadBlocks $ScriptBlockAst "" 2
                 }
+        
             }
+        
         }
         catch {
     
@@ -98,6 +174,5 @@ function PesterScriptBlocksForV5Compat {
         }
     }
 }
-
 
 Export-ModuleMember -Function PesterScriptBlocksForV5Compat
